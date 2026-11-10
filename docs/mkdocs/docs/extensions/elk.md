@@ -2,7 +2,7 @@
 
 - Extension name : `elk`
 - Compatibility  : `*`
-- Providers : virtualbox/azure/vmware/aws/ludus
+- Providers : virtualbox/azure/vmware/aws/ludus/proxmox
 - Add a machine  : elk  (ip_range.50)
 
 - Kibana is configured on http://{{ip_range}}.50:5601 to follow the lab events
