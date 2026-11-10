@@ -130,7 +130,6 @@ class Goad(cmd.Cmd):
                         m = re.match(r'^(\S+)\s+ansible_host=', line)
                         if m:
                             expected.add(m.group(1).upper())
-                break
         ips = {}
         deadline = _time.time() + timeout
         settled = False
@@ -295,6 +294,15 @@ class Goad(cmd.Cmd):
             try:
                 cli = paramiko.SSHClient()
                 cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                try:
+                    # already seeded? (template creds are rotated after first provisioning)
+                    cli.connect(ip, username=transport_user, password=transport_password,
+                                timeout=15, allow_agent=False, look_for_keys=False)
+                    cli.close()
+                    Log.success(f'{host}: transport user {transport_user} already present')
+                    continue
+                except Exception:
+                    pass
                 cli.connect(ip, username=tuser, password=tpass,
                             timeout=15, allow_agent=False, look_for_keys=False)
                 if os_type == 'windows':
