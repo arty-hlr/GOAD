@@ -65,6 +65,7 @@ resource "proxmox_virtual_environment_vm" "bgp-linux" {
     lifecycle {
       ignore_changes = [
         vga,
+        initialization,
       ]
     }
 
