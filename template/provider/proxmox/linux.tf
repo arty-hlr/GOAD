@@ -25,7 +25,7 @@ locals {
 resource "proxmox_virtual_environment_vm" "bgp-linux" {
   for_each = var.linux_vm_config
 
-    name = each.value.name
+    name = "${var.vm_name_prefix}-${each.value.name}"
     description = each.value.desc
     node_name   = var.pm_node
     pool_id     = var.pm_pool
