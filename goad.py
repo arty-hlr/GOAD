@@ -111,6 +111,164 @@ class Goad(cmd.Cmd):
             self.lab_manager.get_current_instance_provider().reset()
         self.do_start()
 
+    def discover_and_patch_inventory(self, timeout=420):
+        import os
+        import re
+        import time as _time
+        provider = self.lab_manager.get_current_instance_provider()
+        settings = self.lab_manager.current_settings
+        instance = self.lab_manager.get_current_instance()
+        expected = set()
+        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+            path = os.path.join(instance.instance_path, inv_file)
+            if os.path.isfile(path):
+                with open(path) as f:
+                    for line in f:
+                        m = re.match(r'^(\S+)\s+ansible_host=', line)
+                        if m:
+                            expected.add(m.group(1).upper())
+                break
+        ips = {}
+        deadline = _time.time() + timeout
+        settled = False
+        while True:
+            ips = provider.get_vm_ips() if hasattr(provider, 'get_vm_ips') else {}
+            def _found(h):
+                return any(n.upper() == h or n.upper().endswith('-' + h) for n in ips)
+            missing = {h for h in expected if not _found(h)} if expected else set()
+            if not missing:
+                break
+            if _time.time() >= deadline:
+                Log.error(f'IP discovery incomplete after {timeout}s, missing: {", ".join(sorted(missing))}')
+                break
+            if not settled:
+                Log.info('Guest agents not ready yet (fresh clones/sysprep reboot) - sleeping 120s before retrying')
+                _time.sleep(120)
+                settled = True
+                continue
+            Log.info(f'IP discovery incomplete (missing: {", ".join(sorted(missing))}) - retrying in 15s')
+            _time.sleep(15)
+        if not ips:
+            Log.error('VM IP discovery failed - keeping inventory as generated')
+            return {}
+        mapping = {}
+        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+            path = os.path.join(instance.instance_path, inv_file)
+            if not os.path.isfile(path):
+                continue
+            with open(path) as f:
+                lines = f.readlines()
+            changed = False
+            for i, line in enumerate(lines):
+                m = re.match(r'^(\S+)\s+ansible_host=(\S+)(.*)$', line)
+                if not m:
+                    continue
+                host, current_ip, rest = m.groups()
+                vm_name = next((n for n in ips
+                                if n.upper() == host.upper()
+                                or n.upper().endswith('-' + host.upper())), None)
+                if vm_name is None:
+                    continue
+                if ips[vm_name] != current_ip:
+                    Log.info(f'{host}: ansible_host {current_ip} -> {ips[vm_name]} ({vm_name})')
+                    lines[i] = f'{host} ansible_host={ips[vm_name]}{rest}\n'
+                    mapping[host] = ips[vm_name]
+                    changed = True
+            if changed:
+                with open(path, 'w') as f:
+                    f.writelines(lines)
+        if mapping:
+            Log.success(f'Discovered IPs applied to inventory: {mapping}')
+        else:
+            Log.success('Inventory IPs already match discovered VM IPs')
+        return mapping
+
+    def wait_winrm_ready(self, timeout=300):
+        import os
+        import re
+        import socket
+        instance = self.lab_manager.get_current_instance()
+        targets = []
+        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+            path = os.path.join(instance.instance_path, inv_file)
+            if os.path.isfile(path):
+                with open(path) as f:
+                    for line in f:
+                        m = re.search(r'ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
+                        if m and m.group(1) not in targets:
+                            targets.append(m.group(1))
+                break
+        if not targets:
+            Log.error('No ansible_host targets found for WinRM wait')
+            return
+        pending = set(targets)
+        Log.info(f'Waiting for WinRM (5985) on: {", ".join(sorted(pending))} (timeout {timeout}s)')
+        deadline = time.time() + timeout
+        while pending and time.time() < deadline:
+            for ip in list(pending):
+                try:
+                    with socket.create_connection((ip, 5985), timeout=2):
+                        Log.success(f'WinRM up on {ip}')
+                        pending.discard(ip)
+                except OSError:
+                    pass
+            if pending:
+                time.sleep(10)
+        if pending:
+            Log.error(f'WinRM still unreachable after {timeout}s: {", ".join(sorted(pending))} - continuing anyway')
+        else:
+            Log.success('All lab VMs have WinRM available')
+
+    def create_transport_user(self):
+        """Create a dedicated ansible transport user on each VM before provisioning.
+
+        GOAD roles rotate the local Administrator password (settings/admin_password,
+        domain promotion, LAPS), which breaks any transport using that account.
+        This creates goadsvc (Administrators) using the TEMPLATE credentials
+        (administrator / template password), which are still valid at this stage.
+        Idempotent: skips hosts where the user already exists.
+        """
+        import os
+        import re
+        import paramiko
+        instance = self.lab_manager.get_current_instance()
+        template_user = 'administrator'
+        template_password = 'Password!'
+        transport_user = 'goadsvc'
+        transport_password = 'G0adTransport!2026'
+        targets = {}
+        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+            path = os.path.join(instance.instance_path, inv_file)
+            if os.path.isfile(path):
+                with open(path) as f:
+                    for line in f:
+                        m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
+                        if m:
+                            targets[m.group(1)] = m.group(2)
+                break
+        if not targets:
+            Log.error('create_transport_user: no targets found in inventory')
+            return
+        Log.info(f'Ensuring transport user {transport_user} on: {", ".join(sorted(targets))}')
+        for host, ip in sorted(targets.items()):
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(ip, username=template_user, password=template_password,
+                            timeout=15, allow_agent=False, look_for_keys=False)
+                _, out, err = cli.exec_command(
+                    f'net user {transport_user} {transport_password} /add /y ; '
+                    f'net localgroup Administrators {transport_user} /add')
+                rc = out.channel.recv_exit_status()
+                msg = (out.read().decode(errors='replace') + err.read().decode(errors='replace')).strip()
+                cli.close()
+                if rc == 0:
+                    Log.success(f'{host}: transport user {transport_user} ready')
+                else:
+                    Log.error(f'{host}: transport user creation rc={rc}: {msg}')
+            except Exception as e:
+                Log.error(f'{host}: transport user creation failed: {e}')
+
     def do_provide(self, arg=''):
         result = self.lab_manager.get_current_instance_provider().install()
         if result:
@@ -127,6 +285,9 @@ class Goad(cmd.Cmd):
                     instance_id = self.lab_manager.get_current_instance_id()
                     self.do_load(instance_id)
                     self.refresh_prompt()
+        self.discover_and_patch_inventory()
+        self.wait_winrm_ready()
+        self.create_transport_user()
 
     def do_provision(self, arg):
         if arg == '':
