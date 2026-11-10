@@ -8,5 +8,5 @@ sysmon_config_url: "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-con
 winlogbeat_service:
   install_path_64: "C:\\Program Files\\Elastic\\winlogbeat"
   install_path_32: "C:\\Program Files (x86)\\Elastic\\winlogbeat"
-  version: "7.17.6"
+  version: "9.0.1"
   download: true

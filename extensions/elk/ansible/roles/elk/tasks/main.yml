@@ -1,95 +1,77 @@
-- name: "Update cache"
-  apt:
-    update_cache: true
-    cache_valid_time: 86400
-
-- name: Add required dependencies.
-  apt:
+---
+# Deploy the ELK stack as the elastic-container docker stack (Elasticsearch 9.x,
+# Kibana, Fleet) - mirrors the BASE-EDR-Elastic VM from the EDR lab.
+- name: Install docker and tooling (Ubuntu repositories)
+  ansible.builtin.apt:
     name:
-      - apt-transport-https
-      - gnupg2
+      - docker.io
+      - docker-compose-v2
+      - git
+      - curl
     state: present
     update_cache: yes
+    cache_valid_time: 3600
 
-- name: Add Elasticsearch apt key.
-  apt_key:
-    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
-    state: present
-
-- name: Add Elasticsearch repository.
-  apt_repository:
-    repo: 'deb https://artifacts.elastic.co/packages/{{ elasticsearch_version }}/apt stable main'
-    state: present
-    update_cache: true
-
-- name: Install logstash
-  apt:
-    name: logstash
-    state: present
-
-- name: Install java
-  apt:
-    name: openjdk-11-jre
-    state: present
-
-- name: Install elasticsearch
-  apt:
-    name: elasticsearch
-    state: present
-
-- name: Install kibana
-  apt:
-    name: kibana
-    state: present
-
-- name: copy kibana config
-  copy:
-    src: kibana.yml
-    dest: /etc/kibana/kibana.yml
-    owner: "root"
-    group: "kibana"
-    mode: 0660
-
-- name: elasticsearch change start timeout to 3min
-  lineinfile:
-    destfile: /usr/lib/systemd/system/elasticsearch.service
-    regexp: 'TimeoutStartSec='
-    line: 'TimeoutStartSec=180'
-
-- name: copy elasticsearch config
-  copy:
-    src: elasticsearch.yml
-    dest: /etc/elasticsearch/elasticsearch.yml
-    owner: "root"
-    group: "elasticsearch"
-    mode: 0660
-
-- name: enable logstash
-  service:
-    name: logstash
+- name: Ensure docker service is running
+  ansible.builtin.service:
+    name: docker
+    state: started
     enabled: yes
 
-- name: enable elasticsearch
-  service:
-    name: elasticsearch
-    enabled: yes
+- name: Clone elastic-container (pinned, first run only)
+  ansible.builtin.git:
+    repo: https://github.com/peasead/elastic-container
+    dest: "{{ elastic_container_dir }}"
+    version: "{{ elastic_container_version }}"
+    update: no
+  become: yes
 
-- name: enable kibana
-  service:
-    name: kibana
-    enabled: yes
+- name: Customize elastic-container .env (upstream defaults preserved)
+  ansible.builtin.lineinfile:
+    path: "{{ elastic_container_dir }}/.env"
+    regexp: "^{{ item.key }}=.*"
+    line: "{{ item.key }}={{ item.value }}"
+  become: yes
+  loop:
+    - { key: ELASTIC_PASSWORD, value: "{{ elastic_password }}" }
+    - { key: KIBANA_PASSWORD, value: "{{ kibana_password }}" }
+    - { key: STACK_VERSION, value: "{{ elastic_stack_version }}" }
+    - { key: LICENSE, value: "{{ elastic_license }}" }
+    - { key: MEM_LIMIT, value: "{{ elastic_mem_limit }}" }
+  no_log: true
 
-- name: start logstash
-  service:
-    name: logstash
-    state: started
+- name: Check whether the stack images are already staged
+  ansible.builtin.command: docker image inspect docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_stack_version }}
+  register: es_image
+  failed_when: false
+  changed_when: false
 
-- name: start elasticsearch
-  service:
-    name: elasticsearch
-    state: started
+- name: Stage the stack (pull images and packages)
+  ansible.builtin.command: ./elastic-container.sh stage
+  args:
+    chdir: "{{ elastic_container_dir }}"
+  become: yes
+  async: 1800
+  poll: 30
+  changed_when: true
+  when: es_image.rc != 0
 
-- name: start kibana
-  service:
-    name: kibana
-    state: started
+- name: Start the stack
+  ansible.builtin.command: ./elastic-container.sh start
+  args:
+    chdir: "{{ elastic_container_dir }}"
+  become: yes
+  async: 3600
+  poll: 60
+  changed_when: true
+
+- name: Wait for the Elasticsearch API
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 9200
+    timeout: 900
+
+- name: Expose stack credentials to the logs_windows role
+  ansible.builtin.set_fact:
+    elk_api_host: "{{ ansible_host }}"
+    elk_api_password: "{{ elastic_password }}"

@@ -35,6 +35,7 @@ resource "proxmox_virtual_environment_vm" "bgp-linux" {
     }
 
     cpu {
+      type    = "host"
       cores   = each.value.cores
       sockets = 1
     }

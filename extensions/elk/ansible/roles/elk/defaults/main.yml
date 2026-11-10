@@ -1,2 +1,10 @@
-elasticsearch_version: '7.x'
-es_cluster_name: elasticsearch
+---
+# elastic-container (docker) based ELK stack - replaces the legacy native 7.x install
+# which cannot run on modern Ubuntu (apt-key removed, openjdk-11 gone, 7.x repo EOL).
+elastic_container_version: "55c2b71"
+elastic_stack_version: "9.0.1"
+elastic_license: "basic"
+elastic_password: "G0adElkStack!2026"
+kibana_password: "G0adKibana!2026"
+elastic_mem_limit: "4g"
+elastic_container_dir: "/opt/elastic-container"
