@@ -29,7 +29,7 @@ locals {
 resource "proxmox_virtual_environment_vm" "bgp" {
   for_each = var.vm_config
 
-    vm_id = local.vm_ids[each.key]
+    vm_id = lookup(local.vm_ids, each.key, null)
     name = "${var.vm_name_prefix}-${each.value.name}"
     description = each.value.desc
     node_name   = var.pm_node
