@@ -118,8 +118,11 @@ class Goad(cmd.Cmd):
         provider = self.lab_manager.get_current_instance_provider()
         settings = self.lab_manager.current_settings
         instance = self.lab_manager.get_current_instance()
+        import glob as _glob
+        inv_files = ['inventory', 'inventory_disable_vagrant'] + sorted(
+            _glob.glob(os.path.join(instance.instance_path, '*_inventory')))
         expected = set()
-        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+        for inv_file in inv_files:
             path = os.path.join(instance.instance_path, inv_file)
             if os.path.isfile(path):
                 with open(path) as f:
@@ -152,7 +155,7 @@ class Goad(cmd.Cmd):
             Log.error('VM IP discovery failed - keeping inventory as generated')
             return {}
         mapping = {}
-        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+        for inv_file in inv_files:
             path = os.path.join(instance.instance_path, inv_file)
             if not os.path.isfile(path):
                 continue
@@ -258,7 +261,12 @@ class Goad(cmd.Cmd):
         """
         import os
         import re
+        from goad.goadpath import GoadPath
         instance = self.lab_manager.get_current_instance()
+        ext_provider_dir = GoadPath.get_extension_providers_provider_path(
+            extension_name, instance.provider_name)
+        os_type = 'windows' if os.path.isfile(
+            os.path.join(ext_provider_dir, 'windows.tf')) else 'linux'
         inv_file = os.path.join(instance.instance_path, extension_name + '_inventory')
         if not os.path.isfile(inv_file):
             Log.error(f'create_extension_transport_user: {inv_file} not found')
@@ -268,7 +276,7 @@ class Goad(cmd.Cmd):
             for line in f:
                 m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
                 if m:
-                    targets[m.group(1)] = (m.group(2), 'linux')
+                    targets[m.group(1)] = (m.group(2), os_type)
         if not targets:
             Log.error(f'create_extension_transport_user: no hosts in {inv_file}')
             return
@@ -563,6 +571,8 @@ class Goad(cmd.Cmd):
                     self.lab_manager.get_current_instance().enable_extension(extension_name)
                     # # start lab with extensions files (vagrant up / terraform plan)
                     self.lab_manager.get_current_instance_provider().install()
+                    # # re-sync IPs (extension enable re-rendered the inventories)
+                    self.discover_and_patch_inventory()
                     # # seed transport user on the extension VM(s) before provisioning
                     self.create_extension_transport_user(extension_name)
                     # # provision extension
