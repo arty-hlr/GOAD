@@ -3,7 +3,7 @@
   desc               = "DC01 - windows server 2019 - {{ip_range}}.10"
   cores              = 2
   memory             = 3096
-  clone              = "WinServer2019_x64"
+  clone              = "WinServer2022_x64"
   dns                = "{{ip_range}}.1"
   ip                 = "{{ip_range}}.10/24"
   gateway            = "{{ip_range}}.1"
@@ -13,7 +13,7 @@
   desc               = "DC02 - windows server 2019 - {{ip_range}}.11"
   cores              = 2
   memory             = 3096
-  clone              = "WinServer2019_x64"
+  clone              = "WinServer2022_x64"
   dns                = "{{ip_range}}.1"
   ip                 = "{{ip_range}}.11/24"
   gateway            = "{{ip_range}}.1"
@@ -23,7 +23,7 @@
   desc               = "SRV02 - windows server 2019 - {{ip_range}}.22"
   cores              = 2
   memory             = 6240
-  clone              = "WinServer2019_x64"
+  clone              = "WinServer2022_x64"
   dns                = "{{ip_range}}.1"
   ip                 = "{{ip_range}}.22/24"
   gateway            = "{{ip_range}}.1"
