@@ -28,7 +28,21 @@ class ProxmoxProvider(TerraformProvider):
         else:
             pm_password = self.pm_password
         parsed_url = urlparse(self.pm_api_url)
-        proxmox = ProxmoxAPI(parsed_url.hostname, user=self.pm_user, password=pm_password, verify_ssl=False)
+        if '!' in self.pm_user:
+
+            # API token credentials: ticket auth does not work for tokens
+
+            base_user, token_name = self.pm_user.split('!', 1)
+
+            proxmox = ProxmoxAPI(parsed_url.hostname, user=base_user,
+
+                                 token_name=token_name, token_value=pm_password,
+
+                                 verify_ssl=False, timeout=60)
+
+        else:
+
+            proxmox = ProxmoxAPI(parsed_url.hostname, user=self.pm_user, password=pm_password, verify_ssl=False, timeout=60)
         try:
             proxmox.nodes.get()  # Fetches all nodes to verify connection
             self.pm_password = pm_password
@@ -44,6 +58,38 @@ class ProxmoxProvider(TerraformProvider):
             self.command.check_ansible()
         ]
         return all(checks)
+
+    def get_vm_ips(self):
+        proxmox = self._get_proxmox()
+        if proxmox is None:
+            return {}
+        ips = {}
+        try:
+            pool = proxmox.pools(self.pm_pool).get()
+        except Exception:
+            Log.error(f'Cannot list pool {self.pm_pool}')
+            return {}
+        for member in pool.get('members', []):
+            if member.get('type') != 'qemu':
+                continue
+            vmid = member['vmid']
+            node = member['node']
+            name = member.get('name', str(vmid))
+            try:
+                result = proxmox.nodes(node).qemu(vmid).agent('network-get-interfaces').get()
+                nics = result.get('result', result) if isinstance(result, dict) else result
+                for nic in nics:
+                    if nic.get('name') == 'lo':
+                        continue
+                    for addr in nic.get('ip-addresses', []):
+                        if addr.get('ip-address-type') == 'ipv4' and not addr['ip-address'].startswith('127.'):
+                            ips[name] = addr['ip-address']
+                            break
+                    if name in ips:
+                        break
+            except Exception as e:
+                Log.error(f'Agent lookup failed for {name} (vmid {vmid}): {e}')
+        return ips
 
     @staticmethod
     def _color_vm_state(state):
