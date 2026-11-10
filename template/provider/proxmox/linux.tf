@@ -15,6 +15,13 @@ variable "linux_vm_config" {
   }
 }
 
+locals {
+  linux_vm_ids = {
+    elk   = 7007
+    wazuh = 7008
+  }
+}
+
 resource "proxmox_virtual_environment_vm" "bgp-linux" {
   for_each = var.linux_vm_config
 
@@ -35,6 +42,8 @@ resource "proxmox_virtual_environment_vm" "bgp-linux" {
     memory {
       dedicated = each.value.memory
     }
+
+    vm_id = lookup(local.linux_vm_ids, each.key, null)
 
     clone {
       vm_id = lookup(var.vm_template_id, each.value.clone, -1)
