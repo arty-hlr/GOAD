@@ -281,25 +281,36 @@ class Goad(cmd.Cmd):
             Log.error(f'create_extension_transport_user: no hosts in {inv_file}')
             return
         self._seed_transport_users(targets, 'goadsvc', 'G0adTransport!2026')
-        # linux extension VMs run cloud-init (apt update/upgrade) at boot - wait for it
-        # to release the dpkg lock before provisioning, or the apt tasks race with it.
+        # linux extension VMs run boot-time apt jobs (unattended-upgrades, cloud-init)
+        # that hold the dpkg lock - wait for the lock itself before provisioning.
+        import time as _time
         for host, (ip, os_type) in sorted(targets.items()):
             if os_type != 'linux':
                 continue
+            deadline = _time.time() + 900
+            free = False
             try:
                 cli = paramiko.SSHClient()
                 cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 cli.connect(ip, username='goadsvc', password='G0adTransport!2026',
                             timeout=15, allow_agent=False, look_for_keys=False)
-                _, out, _ = cli.exec_command('cloud-init status --wait', timeout=900)
-                rc = out.channel.recv_exit_status()
+                while _time.time() < deadline:
+                    _, out, _ = cli.exec_command(
+                        'sudo -n fuser -s /var/lib/dpkg/lock-frontend '
+                        '/var/lib/dpkg/lock /var/lib/apt/lists/lock 2>/dev/null')
+                    rc = out.channel.recv_exit_status()
+                    if rc != 0:  # no process holds any lock
+                        free = True
+                        break
+                    Log.info(f'{host}: apt/dpkg lock still held - waiting 15s')
+                    _time.sleep(15)
                 cli.close()
-                if rc == 0:
-                    Log.success(f'{host}: cloud-init finished')
+                if free:
+                    Log.success(f'{host}: dpkg locks free')
                 else:
-                    Log.error(f'{host}: cloud-init status --wait rc={rc} - continuing anyway')
+                    Log.error(f'{host}: dpkg locks still held after 900s - continuing anyway')
             except Exception as e:
-                Log.error(f'{host}: cloud-init wait failed: {e}')
+                Log.error(f'{host}: dpkg lock wait failed: {e}')
 
     def _seed_transport_users(self, targets, transport_user, transport_password):
         """Create transport_user on each (ip, os) target using per-OS template credentials."""
