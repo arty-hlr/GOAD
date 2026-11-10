@@ -304,7 +304,9 @@ class Goad(cmd.Cmd):
                         continue
                     inner = (f'useradd -m -s /bin/bash {transport_user} ; '
                              f'echo "{transport_user}:{transport_password}" | chpasswd ; '
-                             f'usermod -aG sudo {transport_user}')
+                             f'usermod -aG sudo {transport_user} ; '
+                             f'echo "{transport_user} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/{transport_user} ; '
+                             f'chmod 440 /etc/sudoers.d/{transport_user}')
                     cmd = f"echo '{tpass}' | sudo -S sh -c '{inner}'"
                     _, out, err = cli.exec_command(cmd)
                     rc = out.channel.recv_exit_status()
