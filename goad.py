@@ -244,6 +244,104 @@ class Goad(cmd.Cmd):
                     for line in f:
                         m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
                         if m:
+                            targets[m.group(1)] = (m.group(2), 'windows')
+                break
+        if not targets:
+            Log.error('create_transport_user: no targets found in inventory')
+            return
+        self._seed_transport_users(targets, transport_user, transport_password)
+
+    def create_extension_transport_user(self, extension_name):
+        """Create the transport user on extension VMs (called after extension terraform).
+
+        Extension linux VMs (elk/wazuh/lx01) use template credentials user/Password!.
+        """
+        import os
+        import re
+        instance = self.lab_manager.get_current_instance()
+        inv_file = os.path.join(instance.instance_path, extension_name + '_inventory')
+        if not os.path.isfile(inv_file):
+            Log.error(f'create_extension_transport_user: {inv_file} not found')
+            return
+        targets = {}
+        with open(inv_file) as f:
+            for line in f:
+                m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
+                if m:
+                    targets[m.group(1)] = (m.group(2), 'linux')
+        if not targets:
+            Log.error(f'create_extension_transport_user: no hosts in {inv_file}')
+            return
+        self._seed_transport_users(targets, 'goadsvc', 'G0adTransport!2026')
+
+    def _seed_transport_users(self, targets, transport_user, transport_password):
+        """Create transport_user on each (ip, os) target using per-OS template credentials."""
+        import paramiko
+        creds = {
+            'windows': ('administrator', 'Password!'),
+            'linux': ('user', 'Password!'),
+        }
+        Log.info(f'Ensuring transport user {transport_user} on: {", ".join(sorted(targets))}')
+        for host, (ip, os_type) in sorted(targets.items()):
+            tuser, tpass = creds[os_type]
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(ip, username=tuser, password=tpass,
+                            timeout=15, allow_agent=False, look_for_keys=False)
+                if os_type == 'windows':
+                    cmd = (f'net user {transport_user} {transport_password} /add /y ; '
+                           f'net localgroup Administrators {transport_user} /add')
+                    _, out, err = cli.exec_command(cmd)
+                    rc = out.channel.recv_exit_status()
+                else:
+                    check_cmd = f'id -u {transport_user}'
+                    _, out_c, _ = cli.exec_command(check_cmd)
+                    exists = out_c.channel.recv_exit_status() == 0
+                    if exists:
+                        cli.close()
+                        Log.success(f'{host}: transport user {transport_user} already present')
+                        continue
+                    inner = (f'useradd -m -s /bin/bash {transport_user} ; '
+                             f'echo "{transport_user}:{transport_password}" | chpasswd ; '
+                             f'usermod -aG sudo {transport_user}')
+                    cmd = f"echo '{tpass}' | sudo -S sh -c '{inner}'"
+                    _, out, err = cli.exec_command(cmd)
+                    rc = out.channel.recv_exit_status()
+                msg = (out.read().decode(errors='replace') + err.read().decode(errors='replace')).strip()
+                cli.close()
+                if rc == 0:
+                    Log.success(f'{host}: transport user {transport_user} ready')
+                else:
+                    Log.error(f'{host}: transport user creation rc={rc}: {msg}')
+            except Exception as e:
+                Log.error(f'{host}: transport user creation failed: {e}')
+
+
+        """Create a dedicated ansible transport user on each VM before provisioning.
+
+        GOAD roles rotate the local Administrator password (settings/admin_password,
+        domain promotion, LAPS), which breaks any transport using that account.
+        This creates goadsvc (Administrators) using the TEMPLATE credentials
+        (administrator / template password), which are still valid at this stage.
+        Idempotent: skips hosts where the user already exists.
+        """
+        import os
+        import re
+        import paramiko
+        instance = self.lab_manager.get_current_instance()
+        template_user = 'administrator'
+        template_password = 'Password!'
+        transport_user = 'goadsvc'
+        transport_password = 'G0adTransport!2026'
+        targets = {}
+        for inv_file in ('inventory', 'inventory_disable_vagrant'):
+            path = os.path.join(instance.instance_path, inv_file)
+            if os.path.isfile(path):
+                with open(path) as f:
+                    for line in f:
+                        m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
+                        if m:
                             targets[m.group(1)] = m.group(2)
                 break
         if not targets:
@@ -463,6 +561,8 @@ class Goad(cmd.Cmd):
                     self.lab_manager.get_current_instance().enable_extension(extension_name)
                     # # start lab with extensions files (vagrant up / terraform plan)
                     self.lab_manager.get_current_instance_provider().install()
+                    # # seed transport user on the extension VM(s) before provisioning
+                    self.create_extension_transport_user(extension_name)
                     # # provision extension
                     self.do_provision_extension(extension_name)
                 else:
