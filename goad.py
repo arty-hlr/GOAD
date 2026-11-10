@@ -260,6 +260,7 @@ class Goad(cmd.Cmd):
         """
         import os
         import re
+        import paramiko
         from goad.goadpath import GoadPath
         instance = self.lab_manager.get_current_instance()
         ext_provider_dir = GoadPath.get_extension_providers_provider_path(
@@ -280,6 +281,25 @@ class Goad(cmd.Cmd):
             Log.error(f'create_extension_transport_user: no hosts in {inv_file}')
             return
         self._seed_transport_users(targets, 'goadsvc', 'G0adTransport!2026')
+        # linux extension VMs run cloud-init (apt update/upgrade) at boot - wait for it
+        # to release the dpkg lock before provisioning, or the apt tasks race with it.
+        for host, (ip, os_type) in sorted(targets.items()):
+            if os_type != 'linux':
+                continue
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(ip, username='goadsvc', password='G0adTransport!2026',
+                            timeout=15, allow_agent=False, look_for_keys=False)
+                _, out, _ = cli.exec_command('cloud-init status --wait', timeout=900)
+                rc = out.channel.recv_exit_status()
+                cli.close()
+                if rc == 0:
+                    Log.success(f'{host}: cloud-init finished')
+                else:
+                    Log.error(f'{host}: cloud-init status --wait rc={rc} - continuing anyway')
+            except Exception as e:
+                Log.error(f'{host}: cloud-init wait failed: {e}')
 
     def _seed_transport_users(self, targets, transport_user, transport_password):
         """Create transport_user on each (ip, os) target using per-OS template credentials."""
@@ -326,56 +346,6 @@ class Goad(cmd.Cmd):
                     cmd = f"echo '{tpass}' | sudo -S sh -c '{inner}'"
                     _, out, err = cli.exec_command(cmd)
                     rc = out.channel.recv_exit_status()
-                msg = (out.read().decode(errors='replace') + err.read().decode(errors='replace')).strip()
-                cli.close()
-                if rc == 0:
-                    Log.success(f'{host}: transport user {transport_user} ready')
-                else:
-                    Log.error(f'{host}: transport user creation rc={rc}: {msg}')
-            except Exception as e:
-                Log.error(f'{host}: transport user creation failed: {e}')
-
-
-        """Create a dedicated ansible transport user on each VM before provisioning.
-
-        GOAD roles rotate the local Administrator password (settings/admin_password,
-        domain promotion, LAPS), which breaks any transport using that account.
-        This creates goadsvc (Administrators) using the TEMPLATE credentials
-        (administrator / template password), which are still valid at this stage.
-        Idempotent: skips hosts where the user already exists.
-        """
-        import os
-        import re
-        import paramiko
-        instance = self.lab_manager.get_current_instance()
-        template_user = 'administrator'
-        template_password = 'Password!'
-        transport_user = 'goadsvc'
-        transport_password = 'G0adTransport!2026'
-        targets = {}
-        for inv_file in ('inventory', 'inventory_disable_vagrant'):
-            path = os.path.join(instance.instance_path, inv_file)
-            if os.path.isfile(path):
-                with open(path) as f:
-                    for line in f:
-                        m = re.match(r'^(\S+)\s+ansible_host=(\d+\.\d+\.\d+\.\d+)', line)
-                        if m:
-                            targets[m.group(1)] = m.group(2)
-                break
-        if not targets:
-            Log.error('create_transport_user: no targets found in inventory')
-            return
-        Log.info(f'Ensuring transport user {transport_user} on: {", ".join(sorted(targets))}')
-        for host, ip in sorted(targets.items()):
-            try:
-                cli = paramiko.SSHClient()
-                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                cli.connect(ip, username=template_user, password=template_password,
-                            timeout=15, allow_agent=False, look_for_keys=False)
-                _, out, err = cli.exec_command(
-                    f'net user {transport_user} {transport_password} /add /y ; '
-                    f'net localgroup Administrators {transport_user} /add')
-                rc = out.channel.recv_exit_status()
                 msg = (out.read().decode(errors='replace') + err.read().decode(errors='replace')).strip()
                 cli.close()
                 if rc == 0:
