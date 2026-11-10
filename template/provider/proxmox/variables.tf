@@ -11,6 +11,10 @@ variable "pm_password" {
     sensitive = true
 }
 
+variable "vm_name_prefix" {
+    default = "{{config.get_value('default', 'lab', 'GOAD')}}"
+}
+
 variable "pm_node" {
   default = "{{config.get_value('proxmox', 'pm_node', 'GOAD')}}"
 }

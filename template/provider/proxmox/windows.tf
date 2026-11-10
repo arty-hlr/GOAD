@@ -16,10 +16,21 @@ variable "vm_config" {
   }
 }
 
+locals {
+  vm_ids = {
+    dc01  = 7001
+    dc02  = 7002
+    dc03  = 7003
+    srv02 = 7004
+    srv03 = 7005
+  }
+}
+
 resource "proxmox_virtual_environment_vm" "bgp" {
   for_each = var.vm_config
 
-    name = each.value.name
+    vm_id = local.vm_ids[each.key]
+    name = "${var.vm_name_prefix}-${each.value.name}"
     description = each.value.desc
     node_name   = var.pm_node
     pool_id     = var.pm_pool
