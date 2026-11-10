@@ -1,0 +1,50 @@
+<ossec_config>
+  <client>
+    <server>
+      <address>{{ wazuh_manager_host }}</address>
+      <port>1514</port>
+      <protocol>tcp</protocol>
+    </server>
+  </client>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Security</location>
+    <query>Event/System[EventID != 5145 and EventID != 4662 and EventID != 4670]</query>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>System</location>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Application</location>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Microsoft-Windows-Sysmon/Operational</location>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Windows PowerShell</location>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Microsoft-Windows-PowerShell/Operational</location>
+  </localfile>
+
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Microsoft-Windows-WMI-Activity/Operational</location>
+  </localfile>
+
+  <localfile>
+    <log_format>syslog</log_format>
+    <location>C:\ProgramData\ossec-agent\active-response\active-responses.log</location>
+  </localfile>
+</ossec_config>

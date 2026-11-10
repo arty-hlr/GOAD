@@ -1,0 +1,10 @@
+<group name="sysmon,local,">
+  <!-- Catch-all: alert on every Sysmon event so the lab has full visibility.
+       The stock sysmon rules are level 0 (logged, not alerted); this raises
+       them to alert level via the 'sysmon' group every Sysmon parent rule
+       carries. ID 115000: 100000-100999 is fully used by the SOCFORTRESS pack. -->
+  <rule id="115000" level="3">
+    <if_group>sysmon</if_group>
+    <description>Sysmon event.</description>
+  </rule>
+</group>

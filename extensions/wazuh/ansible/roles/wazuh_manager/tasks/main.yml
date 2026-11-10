@@ -20,7 +20,7 @@
   when: not ansible_facts.services['wazuh-manager.service'] is defined
 
 - name: Run Wazuh installation script
-  shell: sudo bash /opt/wazuh/wazuh-install.sh -a -i > /opt/wazuh/wazuh-install-output.txt
+  shell: sudo DEBIAN_FRONTEND=noninteractive bash /opt/wazuh/wazuh-install.sh -a -i -o > /opt/wazuh/wazuh-install-output.txt < /dev/null
   when: not ansible_facts.services['wazuh-manager.service'] is defined
 
 # FIX false positive on  /bin/diff  cf. https://github.com/wazuh/wazuh/issues/19000
@@ -29,6 +29,15 @@
     path: /var/ossec/etc/rootcheck/rootkit_trojans.txt
     search_string: 'diff        !bash|^/bin/sh|file\.h|proc\.h|/dev/[^n]|^/bin/.*sh!'
     line: 'diff        !bash|^/bin/sh|file\.h|proc\.h|/dev/[^nf]|^/bin/.*sh!'
+
+- name: Deploy sysmon catch-all local rule
+  copy:
+    src: sysmon_alert_local.xml
+    dest: /var/ossec/etc/rules/sysmon_alert_local.xml
+    owner: wazuh
+    group: wazuh
+    mode: "0640"
+  notify: Restart wazuh-manager
 
 - name: Start Wazuh Manager service
   service:
@@ -42,16 +51,23 @@
     path: /var/ossec
   register: ossec_folder
 
+- name: Install git for the SOCFORTRESS rules script
+  ansible.builtin.apt:
+    name: git
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
 - name: Download SOCFORTRESS Wazuh rules script
   copy:
     src: wazuh_socfortress_rules.sh
     dest: /opt/wazuh/wazuh_socfortress_rules.sh
-    mode: "0755"  # Ensure the script is executable
-  when: not ossec_folder.stat.exists
+    mode: "0755"
 
 - name: Run SOCFORTRESS Wazuh rules script
-  shell: sudo bash /opt/wazuh/wazuh_socfortress_rules.sh
-  when: not ossec_folder.stat.exists
+  shell: sudo DEBIAN_FRONTEND=noninteractive bash /opt/wazuh/wazuh_socfortress_rules.sh < /dev/null
+  args:
+    executable: /bin/bash
 
 - name: Extract username and password
   shell: "grep -E 'User:|Password:' /opt/wazuh/wazuh-install-output.txt | awk '{print $NF}'"

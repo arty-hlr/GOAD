@@ -20,6 +20,15 @@
   win_command: msiexec.exe /i "{{wazuh_install_location}}\wazuh-agent" /q WAZUH_MANAGER={{ wazuh_manager_host }} WAZUH_REGISTRATION_SERVER={{ wazuh_manager_host }}
   when: wazuh_agent_download is succeeded and not wazuh_agent_service.exists
 
+- name: Deploy ossec.conf with Sysmon and PowerShell channels
+  ansible.windows.win_template:
+    src: ossec.conf.j2
+    dest: "C:\\Program Files (x86)\\ossec-agent\\ossec.conf"
+  notify: Restart Wazuh Agent
+
+- name: Flush handlers so a config change restarts before the start task
+  ansible.builtin.meta: flush_handlers
+
 - name: Start Wazuh Agent service
   win_service:
     name: WazuhSvc
